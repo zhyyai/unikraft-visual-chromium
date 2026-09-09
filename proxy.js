@@ -140,7 +140,8 @@ function startChromium() {
 
     const args = [
         `--remote-debugging-port=${cdp_port}`,
-        '--remote-debugging-address=127.0.0.1',
+        '--remote-debugging-address=0.0.0.0',
+        '--remote-allow-origins=*',
         '--no-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
@@ -176,6 +177,7 @@ function startChromium() {
 
 const proxy = httpProxy.createProxyServer({
     target: { host: cdp_host, port: cdp_port },
+    changeOrigin: true,
     ws: true
 });
 
@@ -224,19 +226,32 @@ const server = http.createServer(async function (req, res) {
         return sendJson(res, 401, { error: 'Unauthorized' });
     }
 
-    if (pathname === '/json/version') {
+    if (pathname === '/json/version' || pathname === '/json' || pathname === '/json/list') {
+        const clientHost = req.headers.host || 'localhost';
         modifyResponse(res, req.headers['content-encoding'], function (body) {
-            if (body && body.webSocketDebuggerUrl) {
-                const wsUrl = new URL(body.webSocketDebuggerUrl);
-                const devtoolsPath = wsUrl.pathname;
-                const token = extractToken(req);
-                const tokenParam = token ? `?token=${token}` : '';
-                body.webSocketDebuggerUrl = `ws://${req.headers.host}${devtoolsPath}${tokenParam}`;
+            const token = extractToken(req);
+            const tokenParam = token ? `?token=${token}` : '';
+            function rewriteWs(urlStr) {
+                if (!urlStr) return urlStr;
+                try {
+                    const wsUrl = new URL(urlStr);
+                    return `ws://${clientHost}${wsUrl.pathname}${tokenParam}`;
+                } catch {
+                    return urlStr;
+                }
+            }
+            if (Array.isArray(body)) {
+                body.forEach(item => {
+                    if (item.webSocketDebuggerUrl) item.webSocketDebuggerUrl = rewriteWs(item.webSocketDebuggerUrl);
+                });
+            } else if (body && typeof body === 'object') {
+                if (body.webSocketDebuggerUrl) body.webSocketDebuggerUrl = rewriteWs(body.webSocketDebuggerUrl);
             }
             return body;
         });
     }
 
+    req.headers['host'] = `${cdp_host}:${cdp_port}`;
     proxy.web(req, res);
 });
 
@@ -247,6 +262,7 @@ server.on('upgrade', function (req, socket, head) {
         socket.destroy();
         return;
     }
+    req.headers['host'] = `${cdp_host}:${cdp_port}`;
     proxy.ws(req, socket, head);
 });
 
