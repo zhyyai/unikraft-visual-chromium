@@ -8,16 +8,18 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pre-build test with Docker
+      - name: Inspect Docker build and rootfs size
         run: |
-          echo "Building lightweight optimized container locally..."
+          echo "=== Building Docker image ==="
           docker build -t test-chromium .
-          echo "Docker image size:"
+          echo "=== Image Size ==="
           docker images test-chromium
+          echo "=== Filesystem Breakdown ==="
+          docker run --rm test-chromium sh -c "du -sh /usr /opt /lib /app /etc 2>/dev/null"
 
       - name: Install Unikraft CLI
         uses: unikraft/setup-action@v1

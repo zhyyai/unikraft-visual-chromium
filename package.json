@@ -2,7 +2,6 @@
   "name": "chromium-cdp-visual",
   "version": "1.0.0",
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
     "http-proxy": "^1.18.1",
     "node-http-proxy-json": "^0.1.9"
   }

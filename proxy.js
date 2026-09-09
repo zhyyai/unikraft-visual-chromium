@@ -1,16 +1,15 @@
-const { spawn } = require('child_process');
 const http = require('http');
 const httpProxy = require('http-proxy');
 const modifyResponse = require('node-http-proxy-json');
+const { spawn } = require('child_process');
 const crypto = require('crypto');
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
 const port = 8080;
 const cdp_host = '127.0.0.1';
 const cdp_port = 9222;
-const DB_PATH = process.env.DB_PATH || '/app/data/tokens.db';
+const DB_PATH = process.env.DB_PATH || '/app/data/tokens.json';
 const BOOTSTRAP_ADMIN_TOKEN = process.env.BOOTSTRAP_ADMIN_TOKEN;
 
 function log(msg) {
@@ -22,46 +21,67 @@ if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.exec(`
-  CREATE TABLE IF NOT EXISTS tokens (
-    token TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    last_used INTEGER,
-    expires_at INTEGER,
-    is_admin INTEGER DEFAULT 0
-  )
-`);
+function loadTokens() {
+    try {
+        if (fs.existsSync(DB_PATH)) {
+            return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+        }
+    } catch (e) {
+        log(`Failed to read tokens: ${e.message}`);
+    }
+    return {};
+}
+
+function saveTokens(tokens) {
+    try {
+        const tmp = `${DB_PATH}.tmp.${Date.now()}`;
+        fs.writeFileSync(tmp, JSON.stringify(tokens, null, 2), 'utf8');
+        fs.renameSync(tmp, DB_PATH);
+    } catch (e) {
+        log(`Failed to save tokens: ${e.message}`);
+    }
+}
 
 function createToken(name, expiresAt = null, isAdmin = false) {
     const token = 'k_' + crypto.randomBytes(24).toString('hex');
-    db.prepare(`
-        INSERT INTO tokens (token, name, created_at, expires_at, is_admin)
-        VALUES (?, ?, ?, ?, ?)
-    `).run(token, name, Date.now(), expiresAt, isAdmin ? 1 : 0);
+    const tokens = loadTokens();
+    tokens[token] = {
+        token,
+        name,
+        created_at: Date.now(),
+        last_used: null,
+        expires_at: expiresAt,
+        is_admin: isAdmin ? 1 : 0
+    };
+    saveTokens(tokens);
     return token;
 }
 
 function validateToken(token) {
-    const row = db.prepare('SELECT is_admin, expires_at FROM tokens WHERE token = ?').get(token);
-    if (!row) return { valid: false };
-    if (row.expires_at && Date.now() > row.expires_at) {
-        db.prepare('DELETE FROM tokens WHERE token = ?').run(token);
+    const tokens = loadTokens();
+    const item = tokens[token];
+    if (!item) return { valid: false };
+    if (item.expires_at && Date.now() > item.expires_at) {
+        delete tokens[token];
+        saveTokens(tokens);
         return { valid: false };
     }
-    db.prepare('UPDATE tokens SET last_used = ? WHERE token = ?').run(Date.now(), token);
-    return { valid: true, isAdmin: row.is_admin === 1 };
+    item.last_used = Date.now();
+    saveTokens(tokens);
+    return { valid: true, isAdmin: item.is_admin === 1 };
 }
 
 function revokeToken(token) {
-    const result = db.prepare('DELETE FROM tokens WHERE token = ?').run(token);
-    return result.changes > 0;
+    const tokens = loadTokens();
+    if (!tokens[token]) return false;
+    delete tokens[token];
+    saveTokens(tokens);
+    return true;
 }
 
 function listTokens() {
-    return db.prepare('SELECT token, name, created_at, last_used, expires_at, is_admin FROM tokens').all().map(t => ({
+    const tokens = loadTokens();
+    return Object.values(tokens).map(t => ({
         token: t.token.slice(0, 8) + '...',
         fullToken: t.token,
         name: t.name,
@@ -112,7 +132,7 @@ function readBody(req) {
 }
 
 function startChromium() {
-    log("Spawning native optimized Chromium...");
+    log('Spawning native optimized Chromium...');
     const profileDir = path.join(path.dirname(DB_PATH), 'chromium-profile');
     if (!fs.existsSync(profileDir)) {
         fs.mkdirSync(profileDir, { recursive: true });
@@ -151,7 +171,7 @@ function startChromium() {
         setTimeout(startChromium, 2000);
     });
 
-    log("Chromium process successfully started.");
+    log('Chromium process successfully started.');
 }
 
 const proxy = httpProxy.createProxyServer({
