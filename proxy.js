@@ -1,8 +1,7 @@
-const { chromium } = require('playwright');
+const { spawn } = require('child_process');
 const http = require('http');
 const httpProxy = require('http-proxy');
 const modifyResponse = require('node-http-proxy-json');
-const sem = require('semaphore')(1);
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const path = require('path');
@@ -14,15 +13,10 @@ const cdp_port = 9222;
 const DB_PATH = process.env.DB_PATH || '/app/data/tokens.db';
 const BOOTSTRAP_ADMIN_TOKEN = process.env.BOOTSTRAP_ADMIN_TOKEN;
 
-var devtoolsPath = "";
-
-// Quiet logging - no verbose stdout flooding
 function log(msg) {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] ${msg}`);
+    console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-// Token database initialization
 const dbDir = path.dirname(DB_PATH);
 if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
@@ -117,52 +111,62 @@ function readBody(req) {
     });
 }
 
-// Start browser with heavily optimized flags for 1 vCPU
-async function startBrowser() {
-    log("Launching optimized Chromium instance...");
+function startChromium() {
+    log("Spawning native optimized Chromium...");
     const profileDir = path.join(path.dirname(DB_PATH), 'chromium-profile');
     if (!fs.existsSync(profileDir)) {
         fs.mkdirSync(profileDir, { recursive: true });
     }
 
-    const browser = await chromium.launch({
-        headless: false,
-        args: [
-            `--remote-debugging-port=${cdp_port}`,
-            '--remote-debugging-address=127.0.0.1',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-software-rasterizer',
-            '--renderer-process-limit=4',
-            '--disable-smooth-scrolling',
-            '--enable-low-end-device-mode',
-            '--disable-background-timer-throttling=false',
-            '--disable-features=Translate,OptimizationHints,MediaRouter',
-            '--window-size=1280,720',
-            '--window-position=0,0',
-            `--user-data-dir=${profileDir}`
-        ]
+    const args = [
+        `--remote-debugging-port=${cdp_port}`,
+        '--remote-debugging-address=127.0.0.1',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--renderer-process-limit=4',
+        '--disable-smooth-scrolling',
+        '--enable-low-end-device-mode',
+        '--disable-background-timer-throttling=false',
+        '--disable-features=Translate,OptimizationHints,MediaRouter',
+        '--window-size=1280,720',
+        '--window-position=0,0',
+        '--start-maximized',
+        `--user-data-dir=${profileDir}`,
+        'https://www.google.com'
+    ];
+
+    const child = spawn('chromium', args, {
+        env: { ...process.env, DISPLAY: ':1' },
+        stdio: 'ignore'
     });
-    log("Chromium launched successfully.");
-    return browser;
+
+    child.on('error', (err) => {
+        log(`Chromium spawn error: ${err.message}`);
+    });
+
+    child.on('exit', (code) => {
+        log(`Chromium exited with code ${code}. Respawning in 2s...`);
+        setTimeout(startChromium, 2000);
+    });
+
+    log("Chromium process successfully started.");
 }
 
-// Setup HTTP & WebSocket Proxy
-var proxy = httpProxy.createProxyServer({
+const proxy = httpProxy.createProxyServer({
     target: { host: cdp_host, port: cdp_port },
     ws: true
 });
 
 proxy.on('error', function (err, req, res) {
-    log(`Proxy error: ${err.message}`);
     if (res && res.writeHead) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Proxy error', message: err.message }));
     }
 });
 
-var server = http.createServer(async function (req, res) {
+const server = http.createServer(async function (req, res) {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
 
@@ -204,7 +208,7 @@ var server = http.createServer(async function (req, res) {
         modifyResponse(res, req.headers['content-encoding'], function (body) {
             if (body && body.webSocketDebuggerUrl) {
                 const wsUrl = new URL(body.webSocketDebuggerUrl);
-                devtoolsPath = wsUrl.pathname;
+                const devtoolsPath = wsUrl.pathname;
                 const token = extractToken(req);
                 const tokenParam = token ? `?token=${token}` : '';
                 body.webSocketDebuggerUrl = `ws://${req.headers.host}${devtoolsPath}${tokenParam}`;
@@ -226,14 +230,7 @@ server.on('upgrade', function (req, socket, head) {
     proxy.ws(req, socket, head);
 });
 
-async function main() {
-    await startBrowser();
-    server.listen(port, '0.0.0.0', () => {
-        log(`CDP Proxy listening on 0.0.0.0:${port}`);
-    });
-}
-
-main().catch(err => {
-    console.error("Fatal startup error:", err);
-    process.exit(1);
+startChromium();
+server.listen(port, '0.0.0.0', () => {
+    log(`CDP Proxy listening on 0.0.0.0:${port}`);
 });

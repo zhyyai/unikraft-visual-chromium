@@ -8,12 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - name: Pre-build test with Docker
         run: |
@@ -34,18 +31,25 @@ jobs:
           token = '${{ secrets.KRAFTCLOUD_TOKEN }}'
           headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json', 'Content-Type': 'application/json'}
 
-          # 1. Stop instance
+          # 1. Stop instance using PUT /instances/stop
           try:
               req = urllib.request.Request('https://api.fra.unikraft.cloud/v1/instances', headers=headers)
               insts = json.loads(urllib.request.urlopen(req).read().decode())['data']['instances']
+              targets = []
               for inst in insts:
                   if 'visual-chromium' in inst.get('name', ''):
-                      stop_req = urllib.request.Request(f'https://api.fra.unikraft.cloud/v1/instances/{inst["uuid"]}/stop', headers=headers, method='POST')
-                      urllib.request.urlopen(stop_req)
-                      print(f'Sent stop signal to {inst["uuid"]}')
-              time.sleep(3)
+                      targets.append({'uuid': inst['uuid']})
+              if targets:
+                  stop_req = urllib.request.Request('https://api.fra.unikraft.cloud/v1/instances/stop', data=json.dumps(targets).encode(), headers=headers, method='PUT')
+                  urllib.request.urlopen(stop_req)
+                  print('Sent PUT stop signal to instances:', targets)
+                  time.sleep(4)
+                  del_req = urllib.request.Request('https://api.fra.unikraft.cloud/v1/instances', data=json.dumps(targets).encode(), headers=headers, method='DELETE')
+                  urllib.request.urlopen(del_req)
+                  print('Deleted instances:', targets)
+                  time.sleep(3)
           except Exception as e:
-              print('Stop instance error:', e)
+              print('Instance stop/delete error:', e)
 
           # 2. Delete old image
           try:
@@ -53,8 +57,8 @@ jobs:
               imgs = json.loads(urllib.request.urlopen(req).read().decode())['data']['images']
               for img in imgs:
                   if 'visual-chromium' in img.get('url', ''):
-                      del_req = urllib.request.Request(f'https://api.fra.unikraft.cloud/v1/images/{img["uuid"]}', headers=headers, method='DELETE')
-                      urllib.request.urlopen(del_req)
+                      d_req = urllib.request.Request(f'https://api.fra.unikraft.cloud/v1/images/{img["uuid"]}', headers=headers, method='DELETE')
+                      urllib.request.urlopen(d_req)
                       print(f'Deleted old image {img["uuid"]}')
           except Exception as e:
               print('Image delete error:', e)
