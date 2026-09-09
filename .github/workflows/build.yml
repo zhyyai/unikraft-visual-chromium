@@ -19,6 +19,29 @@ jobs:
           echo "=== Docker Image Size ==="
           docker images test-chromium
 
+      - name: Clean old image manifest from Harbor
+        continue-on-error: true
+        run: |
+          python3 -c "
+          import urllib.request
+          token = '${{ secrets.KRAFTCLOUD_TOKEN }}'
+          headers = {
+              'Authorization': f'Basic {token}',
+              'Accept': 'application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json'
+          }
+          try:
+              req = urllib.request.Request('https://unikraft.io/v2/voss/visual-chromium-cdp/manifests/latest', headers=headers, method='HEAD')
+              with urllib.request.urlopen(req) as resp:
+                  digest = resp.headers.get('Docker-Content-Digest')
+                  if digest:
+                      print('Found old digest:', digest)
+                      del_req = urllib.request.Request(f'https://unikraft.io/v2/voss/visual-chromium-cdp/manifests/{digest}', headers=headers, method='DELETE')
+                      urllib.request.urlopen(del_req)
+                      print('Successfully cleaned old manifest from Harbor!')
+          except Exception as e:
+              print('Clean warning (already empty or non-existent):', e)
+          "
+
       - name: Install Unikraft CLI
         uses: unikraft/setup-action@v1
         with:

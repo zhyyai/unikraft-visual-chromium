@@ -29,12 +29,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     python3 \
     procps \
+    binutils \
  && find /usr/lib/chromium/locales -type f ! -name "en-US.pak" ! -name "zh-CN.pak" -delete \
  && rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale \
            /usr/share/icons /usr/share/mime \
            /usr/lib/chromium/chromedriver \
            /usr/lib/chromium/libvk_swiftshader.so \
-           /var/lib/apt/lists/* /tmp/* /var/tmp/*
+ && strip -s /usr/lib/chromium/chromium /usr/bin/node /usr/bin/Xvfb /usr/bin/x11vnc /usr/bin/openbox 2>/dev/null || true \
+ && apt-get purge -y binutils \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 WORKDIR /app
 COPY --from=builder /opt/noVNC /opt/noVNC
