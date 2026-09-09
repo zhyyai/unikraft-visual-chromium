@@ -1,6 +1,5 @@
 const http = require('http');
 const httpProxy = require('http-proxy');
-const modifyResponse = require('node-http-proxy-json');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
@@ -115,8 +114,12 @@ function authenticate(req) {
 }
 
 function sendJson(res, statusCode, data) {
-    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(data));
+    const body = JSON.stringify(data);
+    res.writeHead(statusCode, {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'Content-Length': Buffer.byteLength(body)
+    });
+    res.end(body);
 }
 
 function readBody(req) {
@@ -192,8 +195,7 @@ const proxy = httpProxy.createProxyServer({
 
 proxy.on('error', function (err, req, res) {
     if (res && res.writeHead) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Proxy error', message: err.message }));
+        sendJson(res, 502, { error: 'Proxy error', message: err.message });
     }
 });
 
@@ -235,29 +237,43 @@ const server = http.createServer(async function (req, res) {
         return sendJson(res, 401, { error: 'Unauthorized' });
     }
 
+    // Intercept JSON discovery endpoints to rewrite WebSocket URLs cleanly with accurate Content-Length
     if (pathname === '/json/version' || pathname === '/json' || pathname === '/json/list') {
-        const clientHost = req.headers.host || 'localhost';
-        modifyResponse(res, req.headers['content-encoding'], function (body) {
-            const token = extractToken(req);
-            const tokenParam = token ? `?token=${token}` : '';
-            function rewriteWs(urlStr) {
-                if (!urlStr) return urlStr;
+        const cdpReq = http.get(`${targetUrl}${pathname}`, (cdpRes) => {
+            let data = '';
+            cdpRes.on('data', chunk => { data += chunk; });
+            cdpRes.on('end', () => {
                 try {
-                    const wsUrl = new URL(urlStr);
-                    return `ws://${clientHost}${wsUrl.pathname}${tokenParam}`;
-                } catch {
-                    return urlStr;
+                    const clientHost = req.headers.host || 'localhost';
+                    const token = extractToken(req);
+                    const tokenParam = token ? `?token=${token}` : '';
+                    function rewriteWs(urlStr) {
+                        if (!urlStr) return urlStr;
+                        try {
+                            const wsUrl = new URL(urlStr);
+                            return `ws://${clientHost}${wsUrl.pathname}${tokenParam}`;
+                        } catch {
+                            return urlStr;
+                        }
+                    }
+                    let parsed = JSON.parse(data);
+                    if (Array.isArray(parsed)) {
+                        parsed.forEach(item => {
+                            if (item.webSocketDebuggerUrl) item.webSocketDebuggerUrl = rewriteWs(item.webSocketDebuggerUrl);
+                        });
+                    } else if (parsed && typeof parsed === 'object') {
+                        if (parsed.webSocketDebuggerUrl) parsed.webSocketDebuggerUrl = rewriteWs(parsed.webSocketDebuggerUrl);
+                    }
+                    sendJson(res, cdpRes.statusCode, parsed);
+                } catch (err) {
+                    sendJson(res, 500, { error: 'Failed to process CDP response', message: err.message });
                 }
-            }
-            if (Array.isArray(body)) {
-                body.forEach(item => {
-                    if (item.webSocketDebuggerUrl) item.webSocketDebuggerUrl = rewriteWs(item.webSocketDebuggerUrl);
-                });
-            } else if (body && typeof body === 'object') {
-                if (body.webSocketDebuggerUrl) body.webSocketDebuggerUrl = rewriteWs(body.webSocketDebuggerUrl);
-            }
-            return body;
+            });
         });
+        cdpReq.on('error', (err) => {
+            sendJson(res, 502, { error: 'CDP unreachable', message: err.message });
+        });
+        return;
     }
 
     req.headers['host'] = `${cdp_host}:${cdp_port}`;
