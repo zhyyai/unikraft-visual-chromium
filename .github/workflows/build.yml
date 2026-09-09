@@ -26,24 +26,38 @@ jobs:
           token: ${{ secrets.KRAFTCLOUD_TOKEN }}
           organization: voss
 
-      - name: Safe cleanup of old Harbor image
+      - name: Stop running instance and free Harbor quota
         run: |
-          echo "Removing old image to make room for optimized version in 1.0 GiB quota..."
+          echo "Stopping instance and freeing Harbor storage quota..."
           python3 -c "
-          import urllib.request, json
+          import urllib.request, json, time
           token = '${{ secrets.KRAFTCLOUD_TOKEN }}'
-          headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json'}
-          req = urllib.request.Request('https://api.fra.unikraft.cloud/v1/images', headers=headers)
+          headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json', 'Content-Type': 'application/json'}
+
+          # 1. Stop instance
           try:
-              with urllib.request.urlopen(req) as resp:
-                  data = json.loads(resp.read().decode())
-                  for img in data.get('data', {}).get('images', []):
-                      if 'visual-chromium' in img.get('url', ''):
-                          del_req = urllib.request.Request(f'https://api.fra.unikraft.cloud/v1/images/{img["uuid"]}', headers=headers, method='DELETE')
-                          urllib.request.urlopen(del_req)
-                          print(f'Deleted old image {img["uuid"]}')
+              req = urllib.request.Request('https://api.fra.unikraft.cloud/v1/instances', headers=headers)
+              insts = json.loads(urllib.request.urlopen(req).read().decode())['data']['instances']
+              for inst in insts:
+                  if 'visual-chromium' in inst.get('name', ''):
+                      stop_req = urllib.request.Request(f'https://api.fra.unikraft.cloud/v1/instances/{inst["uuid"]}/stop', headers=headers, method='POST')
+                      urllib.request.urlopen(stop_req)
+                      print(f'Sent stop signal to {inst["uuid"]}')
+              time.sleep(3)
           except Exception as e:
-              print('Warning cleanup error:', e)
+              print('Stop instance error:', e)
+
+          # 2. Delete old image
+          try:
+              req = urllib.request.Request('https://api.fra.unikraft.cloud/v1/images', headers=headers)
+              imgs = json.loads(urllib.request.urlopen(req).read().decode())['data']['images']
+              for img in imgs:
+                  if 'visual-chromium' in img.get('url', ''):
+                      del_req = urllib.request.Request(f'https://api.fra.unikraft.cloud/v1/images/{img["uuid"]}', headers=headers, method='DELETE')
+                      urllib.request.urlopen(del_req)
+                      print(f'Deleted old image {img["uuid"]}')
+          except Exception as e:
+              print('Image delete error:', e)
           "
 
       - name: Build and push image to KraftCloud

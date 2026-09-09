@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     binutils \
+    build-essential \
     libcups2 \
     libnss3 \
     libatk1.0-0 \
@@ -44,7 +45,9 @@ COPY package.json /app/
 RUN npm install --omit=dev \
  && npx playwright install --with-deps chromium \
  && rm -rf /root/.cache/ms-playwright/chromium-*/chrome-linux/locales/* \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && apt-get purge -y build-essential \
+ && apt-get autoremove -y
 
 COPY proxy.js xvfb_startup.sh openbox_startup.sh x11vnc_startup.sh novnc_startup.sh wrapper.sh /app/
 RUN chmod +x /app/*.sh
