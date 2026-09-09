@@ -133,9 +133,17 @@ function readBody(req) {
 
 function startChromium() {
     log('Spawning native optimized Chromium...');
-    const profileDir = path.join(path.dirname(DB_PATH), 'chromium-profile');
+    const profileDir = '/tmp/chromium-profile';
     if (!fs.existsSync(profileDir)) {
         fs.mkdirSync(profileDir, { recursive: true });
+    }
+    try {
+        ['SingletonLock', 'SingletonSocket', 'SingletonCookie'].forEach(f => {
+            const p = path.join(profileDir, f);
+            if (fs.existsSync(p)) fs.unlinkSync(p);
+        });
+    } catch (e) {
+        log(`Lock cleanup warning: ${e.message}`);
     }
 
     const args = [
@@ -175,8 +183,9 @@ function startChromium() {
     log('Chromium process successfully started.');
 }
 
+const targetUrl = `http://${cdp_host}:${cdp_port}`;
 const proxy = httpProxy.createProxyServer({
-    target: { host: cdp_host, port: cdp_port },
+    target: targetUrl,
     changeOrigin: true,
     ws: true
 });
@@ -252,7 +261,7 @@ const server = http.createServer(async function (req, res) {
     }
 
     req.headers['host'] = `${cdp_host}:${cdp_port}`;
-    proxy.web(req, res);
+    proxy.web(req, res, { target: targetUrl });
 });
 
 server.on('upgrade', function (req, socket, head) {
@@ -263,7 +272,7 @@ server.on('upgrade', function (req, socket, head) {
         return;
     }
     req.headers['host'] = `${cdp_host}:${cdp_port}`;
-    proxy.ws(req, socket, head);
+    proxy.ws(req, socket, head, { target: targetUrl });
 });
 
 startChromium();
