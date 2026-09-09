@@ -238,8 +238,11 @@ const server = http.createServer(async function (req, res) {
     }
 
     // Intercept JSON discovery endpoints to rewrite WebSocket URLs cleanly with accurate Content-Length
-    if (pathname === '/json/version' || pathname === '/json' || pathname === '/json/list') {
-        const cdpReq = http.get(`${targetUrl}${pathname}`, (cdpRes) => {
+    if (pathname === '/json/version' || pathname === '/json' || pathname === '/json/list' || pathname === '/json/new' || pathname.startsWith('/json/close') || pathname.startsWith('/json/activate')) {
+        url.searchParams.delete('token');
+        const searchStr = url.search ? url.search : '';
+        const cdpTarget = `${targetUrl}${pathname}${searchStr}`;
+        const cdpReq = http.get(cdpTarget, (cdpRes) => {
             let data = '';
             cdpRes.on('data', chunk => { data += chunk; });
             cdpRes.on('end', () => {
@@ -276,6 +279,8 @@ const server = http.createServer(async function (req, res) {
         return;
     }
 
+    url.searchParams.delete('token');
+    req.url = url.pathname + (url.search ? url.search : '');
     req.headers['host'] = `${cdp_host}:${cdp_port}`;
     proxy.web(req, res, { target: targetUrl });
 });
@@ -287,6 +292,9 @@ server.on('upgrade', function (req, socket, head) {
         socket.destroy();
         return;
     }
+    const url = new URL(req.url, 'http://localhost');
+    url.searchParams.delete('token');
+    req.url = url.pathname + (url.search ? url.search : '');
     req.headers['host'] = `${cdp_host}:${cdp_port}`;
     proxy.ws(req, socket, head, { target: targetUrl });
 });
