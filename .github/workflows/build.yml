@@ -1,0 +1,50 @@
+name: Build and Push Optimized Visual Chromium
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Pre-build test with Docker
+        run: |
+          echo "Verifying Dockerfile build locally on runner..."
+          docker build -t test-chromium .
+
+      - name: Install Unikraft CLI
+        uses: unikraft/setup-action@v1
+        with:
+          token: ${{ secrets.KRAFTCLOUD_TOKEN }}
+          organization: voss
+
+      - name: Safe cleanup of old Harbor image
+        run: |
+          echo "Removing old image to make room for optimized version in 1.0 GiB quota..."
+          python3 -c "
+          import urllib.request, json
+          token = '${{ secrets.KRAFTCLOUD_TOKEN }}'
+          headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json'}
+          req = urllib.request.Request('https://api.fra.unikraft.cloud/v1/images', headers=headers)
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  data = json.loads(resp.read().decode())
+                  for img in data.get('data', {}).get('images', []):
+                      if 'visual-chromium' in img.get('url', ''):
+                          del_req = urllib.request.Request(f'https://api.fra.unikraft.cloud/v1/images/{img["uuid"]}', headers=headers, method='DELETE')
+                          urllib.request.urlopen(del_req)
+                          print(f'Deleted old image {img["uuid"]}')
+          except Exception as e:
+              print('Warning cleanup error:', e)
+          "
+
+      - name: Build and push image to KraftCloud
+        run: unikraft build . --output voss/visual-chromium-cdp:latest
